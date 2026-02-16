@@ -73,17 +73,24 @@ input_number:
 template:
   - sensor:
       - name: "Makuuhuone PID Aktiivinen Anturi"
-        unique_id: makuuhuone_pid_active_sensor_v16
+        unique_id: makuuhuone_pid_aktiivinen_anturi
+        unit_of_measurement: "°C"
+        device_class: temperature
         state: >
           {% set primary = 'sensor.esp32_fan_makkari_makuuhuone_lampotila_dallas' %}
+          {% set backup = 'sensor.ruuvitag_0d34_temperature' %}
+          
+          {# Haetaan ensisijaisen anturin tiedot #}
           {% set val = states(primary) %}
           {% set last_upd = states[primary].last_updated if states[primary] is defined else None %}
           {% set diff = (now() - last_upd).total_seconds() if last_upd else 9999 %}
           
+          {# Jos ensisijainen on numero JA päivittynyt alle 300s sitten, käytä sitä #}
           {% if val | is_number and diff < 300 %}
             {{ val }}
+          {# Muussa tapauksessa käytä vara-anturia (RuuviTag) #}
           {% else %}
-            unavailable
+            {{ states(backup) }}
           {% endif %}
 
 # --- 4. AUTOMAATIOT ---
