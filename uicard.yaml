@@ -1,0 +1,26 @@
+type: vertical-stack
+cards:
+  - type: entities
+    title: 🛌 Makuuhuoneen Lämmitys
+    show_header_toggle: false
+    entities:
+      - entity: input_number.makuuhuone_target
+        name: Tavoitelämpötila
+      - entity: sensor.esp32_fan_makkari_makuuhuone_lampotila_dallas
+        name: Dallas (Ensisijainen)
+      - entity: sensor.ruuvitag_0d34_temperature
+        name: Ruuvi (Vara)
+      - entity: number.shellyblutrv_f844771db679_valve_position
+        name: Venttiilin asento
+      - entity: input_boolean.makuuhuone_tuuletus
+        name: Tuuletusmoodi (Ikkuna auki)
+      - type: divider
+      - type: section
+        label: PID-Säädöt (Hienosäätö)
+      - entity: input_number.makuuhuone_kp
+      - entity: input_number.makuuhuone_ki
+      - entity: input_number.makuuhuone_kd
+      - entity: input_number.makuuhuone_integral
+        name: I-Muisti (Pohjateho)
+      - entity: input_number.makuuhuone_pid_output
+        secondary_info: last-updated
