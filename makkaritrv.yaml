@@ -1,0 +1,151 @@
+# packages/makkaritrv.yaml
+#
+# MAKUUHUONEEN PID-SÄÄDIN (SHELLY BLU TRV)
+# Täydellinen paketti (Helpers + Automaatio)
+# Päivitetty: 2026-02-16
+
+# --- 1. ASETUKSET JA MUISTIPAIKAT (HELPERS) ---
+input_number:
+  # Tavoitelämpötila
+  makuuhuone_target:
+    name: "Makuuhuone Tavoite"
+    min: 15
+    max: 22
+    step: 0.1
+    unit_of_measurement: "°C"
+    icon: mdi:thermometer-check
+    initial: 17.5
+
+  # PID: P-kerroin (Reagointinopeus)
+  makuuhuone_kp:
+    name: "Makuuhuone PID - Kp (Teho)"
+    min: 0
+    max: 100
+    step: 1
+    icon: mdi:speedometer
+    initial: 30
+    mode: slider
+
+  # PID: I-kerroin (Korjausajan voimakkuus)
+  makuuhuone_ki:
+    name: "Makuuhuone PID - Ki (Oppiminen)"
+    min: 0
+    max: 10
+    step: 0.1
+    icon: mdi:history
+    initial: 3.0
+    mode: slider
+
+  # PID: I-termin muisti (Integraaliakku)
+  makuuhuone_integral:
+    name: "Makuuhuone I-Muisti"
+    min: 0
+    max: 100
+    step: 0.1
+    unit_of_measurement: "%"
+    icon: mdi:memory
+    mode: box
+    
+  makuuhuone_kd:
+    name: "Makuuhuone Kd (Vaimennus/Jarru)"
+    min: 0
+    max: 500
+    step: 10
+    initial: 100
+    
+  makuuhuone_last_temp:
+    name: "Makuuhuone Edellinen Lämpö"
+    min: 0
+    max: 50
+    step: 0.01
+
+  # Visualisointia varten (Graafiin)
+  makuuhuone_pid_output:
+    name: "Makuuhuone Venttiili (Output)"
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:valve
+    
+
+# --- 3. ANTURILOGIIKKA ---
+template:
+  - sensor:
+      - name: "Makuuhuone PID Aktiivinen Anturi"
+        unique_id: makuuhuone_pid_active_sensor_v16
+        state: >
+          {% set primary = 'sensor.esp32_fan_makkari_makuuhuone_lampotila_dallas' %}
+          {% set val = states(primary) %}
+          {% set last_upd = states[primary].last_updated if states[primary] is defined else None %}
+          {% set diff = (now() - last_upd).total_seconds() if last_upd else 9999 %}
+          
+          {% if val | is_number and diff < 300 %}
+            {{ val }}
+          {% else %}
+            unavailable
+          {% endif %}
+
+# --- 4. AUTOMAATIOT ---
+# MAKUUHUONEEN PID (v17.1 )
+
+automation:
+  - alias: "Makuuhuone - PID Main v17"
+    id: makuuhuone_pid_v17
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    action:
+      - variables:
+          tavoite: "{{ states('input_number.makuuhuone_target') | float(17.5) }}"
+          # Käytetään aktiivista anturitietoa, fallback tavoitteeseen jos anturi hukassa
+          mittaus: "{{ states('sensor.makuuhuone_pid_aktiivinen_anturi') | float(tavoite) }}"
+          
+          kp: "{{ states('input_number.makuuhuone_kp') | float(30) }}"
+          ki: "{{ states('input_number.makuuhuone_ki') | float(3) }}"
+          kd: "{{ states('input_number.makuuhuone_kd') | float(100) }}"
+          
+          ero: "{{ tavoite - mittaus }}"
+          vanha_i: "{{ states('input_number.makuuhuone_integral') | float(0) }}"
+          vanha_temp: "{{ states('input_number.makuuhuone_last_temp') | float(mittaus) }}"
+          
+          # PID Laskenta
+          p_termi: "{{ ero * kp }}"
+          # Integraali kasvaa vain jos ero on merkittävä (> 0.1)
+          uusi_i: "{{ [[vanha_i + (ero * ki), 0] | max, 100] | min if (ero | abs) > 0.1 else vanha_i }}"
+          d_termi: "{{ (vanha_temp - mittaus) * kd }}"
+          
+          pid_out: "{{ [[(p_termi + uusi_i + d_termi) | int, 0] | max, 100] | min }}"
+
+      # 1. TALLENNETAAN ARVOT HETI (Tärkeä muutos!)
+      - action: input_number.set_value
+        target: { entity_id: input_number.makuuhuone_integral }
+        data: { value: "{{ uusi_i }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.makuuhuone_last_temp }
+        data: { value: "{{ mittaus }}" }
+      - action: input_number.set_value
+        target: { entity_id: input_number.makuuhuone_pid_output }
+        data: { value: "{{ pid_out }}" }
+
+      # 2. YRITETÄÄN SÄÄTÄÄ VENTTIILIÄ (Loop)
+      - repeat:
+          count: 10
+          sequence:
+            # huudellaan arvoa bluetoothilla ja toivotaan että pääsee perille (continue_on_error estää automaation kaatumisen)
+            - continue_on_error: true
+              action: number.set_value
+              target: { entity_id: number.shellyblutrv_f844771db679_valve_position }
+              data: { value: "{{ pid_out }}" }
+            
+            # Tarkistetaan menikö perille
+            - if:
+                - condition: template
+                  value_template: "{{ states('number.shellyblutrv_f844771db679_valve_position') | int(-1) == pid_out }}"
+              then:
+                # kun onnistuu, lopetetaan looppi ja koko automaatio (koska tallennus on jo tehty)
+                - stop: "Venttiili säädetty onnistuneesti"
+              else:
+                # Jos epäonnistui, odotetaan hetki ja yritetään uudestaan
+                - delay: "00:00:11"
